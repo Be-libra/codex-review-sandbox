@@ -169,8 +169,9 @@ jobs:
             for logic, consistency, and repository conventions, plus any security issue.
           - Give each finding a priority from 0 to 3, where 3 is most severe, and a
             confidence from 0.00 to 1.00.
-          - Discard anything with priority 0 or confidence below 0.70. Report everything
-            that survives, most severe first, up to 25 findings.
+          - Do not filter by score, and do not stop at a round number. Return every
+            candidate finding, including ones you are unsure about — the workflow applies
+            the threshold and tells the reviewer what it dropped.
           - Keep separate root causes as separate findings. Never merge two problems into
             one comment, even when they sit on adjacent lines.
           - File paths and line numbers must be exactly right. Drop any finding you cannot
@@ -183,55 +184,20 @@ jobs:
 
           ## Output
 
-          A human reviewer pastes these comments into the pull request themselves, so the
-          body of each finding must be ready to post as-is.
+          Return the review through the required output schema. Emit no markdown, no
+          headings, and no commentary — the workflow renders the comment from your JSON.
 
-          If nothing survives the filters, reply with exactly `NO_FINDINGS` and nothing else.
-
-          Otherwise your whole reply must follow the template below. Everything between the
-          `~~~~~` markers is the shape of the reply; the markers themselves are not part of
-          it. Emit the `####` heading lines literally, and keep all three sections even when
-          one is empty — write `none` under an empty heading.
-
-          ~~~~~
-          **Verdict:** patch is incorrect (confidence 0.99) · 2 findings · 1 suppressed
-
-          <details>
-          <summary><b>P3 · 0.92</b> — path/to/file.tsx:42 — title of at most 80 characters</summary>
-
-          [view line](https://github.com/OWNER/REPO/blob/HEAD_SHA/path/to/file.tsx#L42)
-
-          ~~~~markdown
-          The comment body the reviewer will paste, unchanged.
-          ~~~~
-
-          </details>
-
-          #### Also
-
-          - `path/to/other.tsx:17` — a paste-ready comment for a priority 1 finding.
-
-          #### Suppressed
-
-          - `path/to/third.tsx:88` — what you dropped, and why it fell below the bar.
-          ~~~~~
-
-          The template shows one entry per section only to fix the shape. How many entries
-          each section holds depends entirely on the diff.
-
-          Rules for those sections:
-
-          - One `<details>` block per finding of priority 2 or 3, grouped by file. Use the
-            real repository, head commit, path, and line in the link. Keep the paste body
-            inside the `~~~~` fence so it copies cleanly, and add a GitHub `suggestion`
-            block inside that fence only when the fix is a straight replacement of one
-            contiguous region.
-          - Every priority 1 finding goes under `#### Also` as a single paste-ready line,
-            never as a block.
-          - Every finding you dropped is named under `#### Suppressed`. The count in the
-            verdict must equal the number of lines there.
-          - There is no target number of findings, and ten is not a limit. A review that
-            reports a round number and leaves the rest unnamed is incomplete.
+          - `findings` holds one entry per distinct problem, in any order. An empty array
+            means the diff is clean.
+          - `code_location.file_path` is repository-relative, such as
+            `components/UserCard/index.tsx`. `line_range.start` is the line the reviewer's
+            comment attaches to; set `end` to the same value for a single line.
+          - `title` is at most 80 characters and reads like a review comment's subject.
+          - `body` is what the reviewer pastes verbatim: at most two sentences and 40 words,
+            problem then fix, no severity words, no preamble.
+          - `priority` is 0 to 3, where 3 is most severe. `confidence_score` is 0 to 1.
+          - `overall_correctness` judges the patch as a whole, with a short
+            `overall_explanation` and its own `overall_confidence_score`.
           PROMPT
 
           # Author-supplied text is untrusted, so it is appended as data rather than
@@ -245,6 +211,57 @@ jobs:
             fi
           } >> codex-review-prompt.md
 
+      - name: Build the output schema
+        if: steps.diff.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          cat > codex-review-schema.json <<'SCHEMA'
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["overall_correctness", "overall_explanation", "overall_confidence_score", "findings"],
+            "properties": {
+              "overall_correctness": {
+                "type": "string",
+                "enum": ["patch is correct", "patch is incorrect"]
+              },
+              "overall_explanation": { "type": "string" },
+              "overall_confidence_score": { "type": "number" },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["title", "body", "priority", "confidence_score", "code_location"],
+                  "properties": {
+                    "title": { "type": "string" },
+                    "body": { "type": "string" },
+                    "priority": { "type": "integer" },
+                    "confidence_score": { "type": "number" },
+                    "code_location": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["file_path", "line_range"],
+                      "properties": {
+                        "file_path": { "type": "string" },
+                        "line_range": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["start", "end"],
+                          "properties": {
+                            "start": { "type": "integer" },
+                            "end": { "type": "integer" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          SCHEMA
+
       - name: Run Codex
         id: codex
         if: steps.diff.outputs.has_changes == 'true'
@@ -253,6 +270,7 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ":read-only"
           prompt-file: codex-review-prompt.md
+          output-schema-file: codex-review-schema.json
           effort: high
 
       - name: Post the findings
@@ -265,33 +283,129 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const message = (process.env.FINAL_MESSAGE || '').trim();
-            if (!message) {
+            const MIN_CONFIDENCE = 0.7;
+
+            const raw = (process.env.FINAL_MESSAGE || '').trim();
+            if (!raw) {
               core.setFailed('Codex returned an empty review.');
               return;
             }
 
-            await core.summary.addRaw(message).write();
+            const headSha = process.env.HEAD_SHA;
+            const shortSha = headSha.slice(0, 7);
+            const footer = `<sub>\`${shortSha}\` · [workflow run](${process.env.RUN_URL})</sub>`;
 
-            if (message === 'NO_FINDINGS') {
-              core.info('Nothing above the reporting threshold, so no comment was posted.');
+            const post = async (body) => {
+              await core.summary.addRaw(body).write();
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: Number(process.env.PR_NUMBER),
+                body: [
+                  '### 🤖 Codex review',
+                  '',
+                  'Advisory only. Copy the comments you agree with into your own review.',
+                  '',
+                  body,
+                  '',
+                  footer,
+                ].join('\n'),
+              });
+            };
+
+            let review;
+            try {
+              review = JSON.parse(raw);
+            } catch {
+              review = null;
+            }
+
+            // A schema miss should still get the reviewer their review, unrendered.
+            if (!review || !Array.isArray(review.findings)) {
+              core.warning('Codex did not return the expected schema; posting its raw output.');
+              await post(raw);
               return;
             }
 
-            const sha = process.env.HEAD_SHA.slice(0, 7);
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: Number(process.env.PR_NUMBER),
-              body: [
-                '### 🤖 Codex review',
+            const relative = (filePath) =>
+              filePath.replace(`${process.env.GITHUB_WORKSPACE}/`, '').replace(/^\/+/, '');
+
+            const reported = [];
+            const suppressed = [];
+            for (const finding of review.findings) {
+              const location = finding.code_location || {};
+              const range = location.line_range || {};
+              const entry = {
+                title: String(finding.title || '').slice(0, 80),
+                body: String(finding.body || '').trim(),
+                priority: Number(finding.priority),
+                confidence: Number(finding.confidence_score),
+                path: relative(String(location.file_path || '')),
+                line: Number(range.start),
+              };
+
+              if (!entry.body || !entry.path || !Number.isInteger(entry.line)) {
+                suppressed.push({ ...entry, reason: 'could not be anchored to a line' });
+              } else if (!(entry.priority > 0)) {
+                suppressed.push({ ...entry, reason: 'priority 0' });
+              } else if (!(entry.confidence >= MIN_CONFIDENCE)) {
+                suppressed.push({ ...entry, reason: `confidence ${entry.confidence.toFixed(2)}` });
+              } else {
+                reported.push(entry);
+              }
+            }
+
+            if (!reported.length && !suppressed.length) {
+              core.info('Codex found nothing, so no comment was posted.');
+              return;
+            }
+
+            reported.sort((a, b) => b.priority - a.priority || b.confidence - a.confidence);
+
+            const anchor = (entry) =>
+              `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/${headSha}/${entry.path}#L${entry.line}`;
+            const label = (entry) => `P${entry.priority} · ${entry.confidence.toFixed(2)}`;
+
+            const lines = [
+              `**Verdict:** ${review.overall_correctness} (confidence ${Number(review.overall_confidence_score).toFixed(2)}) · ${reported.length} findings · ${suppressed.length} suppressed`,
+              '',
+              review.overall_explanation ? `${review.overall_explanation}\n` : '',
+            ];
+
+            for (const entry of reported.filter((f) => f.priority >= 2)) {
+              lines.push(
+                '<details>',
+                `<summary><b>${label(entry)}</b> — ${entry.path}:${entry.line} — ${entry.title}</summary>`,
                 '',
-                'Advisory only. Copy the comments you agree with into your own review.',
+                `[view line](${anchor(entry)})`,
                 '',
-                message,
+                '~~~~markdown',
+                entry.body,
+                '~~~~',
                 '',
-                `<sub>\`${sha}\` · [workflow run](${process.env.RUN_URL})</sub>`,
-              ].join('\n'),
-            });
+                '</details>',
+                '',
+              );
+            }
+
+            const also = reported.filter((f) => f.priority === 1);
+            if (also.length) {
+              lines.push('#### Also', '');
+              for (const entry of also) {
+                lines.push(`- [\`${entry.path}:${entry.line}\`](${anchor(entry)}) — ${entry.body}`);
+              }
+              lines.push('');
+            }
+
+            if (suppressed.length) {
+              lines.push('#### Suppressed', '');
+              for (const entry of suppressed) {
+                const where = entry.path && entry.line ? `\`${entry.path}:${entry.line}\`` : '`unanchored`';
+                lines.push(`- ${where} — ${entry.title || 'untitled'} (${entry.reason})`);
+              }
+              lines.push('');
+            }
+
+            await post(lines.join('\n').trim());
 
       - name: Report a failed run
         if: failure() && github.event_name == 'issue_comment'
