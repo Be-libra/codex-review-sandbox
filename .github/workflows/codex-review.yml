@@ -188,10 +188,13 @@ jobs:
 
           If nothing survives the filters, reply with exactly `NO_FINDINGS` and nothing else.
 
-          Otherwise reply with exactly these four sections, in this order, and nothing else.
-          Every section is mandatory: write `none` under a heading that has no entries.
+          Otherwise your whole reply must follow the template below. Everything between the
+          `~~~~~` markers is the shape of the reply; the markers themselves are not part of
+          it. Emit the `####` heading lines literally, and keep all three sections even when
+          one is empty — write `none` under an empty heading.
 
-          **Verdict:** patch is correct (confidence 0.00) · 0 findings · 0 suppressed
+          ~~~~~
+          **Verdict:** patch is incorrect (confidence 0.99) · 2 findings · 1 suppressed
 
           <details>
           <summary><b>P3 · 0.92</b> — path/to/file.tsx:42 — title of at most 80 characters</summary>
@@ -206,11 +209,15 @@ jobs:
 
           #### Also
 
-          - `path/to/file.tsx:42` — the comment body the reviewer will paste.
+          - `path/to/other.tsx:17` — a paste-ready comment for a priority 1 finding.
 
           #### Suppressed
 
-          - `path/to/file.tsx:42` — one line on what you dropped and why it fell below the bar.
+          - `path/to/third.tsx:88` — what you dropped, and why it fell below the bar.
+          ~~~~~
+
+          The template shows one entry per section only to fix the shape. How many entries
+          each section holds depends entirely on the diff.
 
           Rules for those sections:
 
@@ -223,8 +230,8 @@ jobs:
             never as a block.
           - Every finding you dropped is named under `#### Suppressed`. The count in the
             verdict must equal the number of lines there.
-          - There is no target number of findings. Do not stop at ten; report each distinct
-            problem you are confident about.
+          - There is no target number of findings, and ten is not a limit. A review that
+            reports a round number and leaves the rest unnamed is incomplete.
           PROMPT
 
           # Author-supplied text is untrusted, so it is appended as data rather than
