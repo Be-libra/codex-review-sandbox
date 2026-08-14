@@ -169,8 +169,10 @@ jobs:
             for logic, consistency, and repository conventions, plus any security issue.
           - Give each finding a priority from 0 to 3, where 3 is most severe, and a
             confidence from 0.00 to 1.00.
-          - Discard anything with priority 0 or confidence below 0.70. Report at most 10
-            findings, most severe first, and count what you discarded.
+          - Discard anything with priority 0 or confidence below 0.70. Report everything
+            that survives, most severe first, up to 25 findings.
+          - Keep separate root causes as separate findings. Never merge two problems into
+            one comment, even when they sit on adjacent lines.
           - File paths and line numbers must be exactly right. Drop any finding you cannot
             anchor to a specific line in the diff.
           - Each comment body must read as a human reviewer wrote it: at most two sentences
@@ -186,10 +188,11 @@ jobs:
 
           If nothing survives the filters, reply with exactly `NO_FINDINGS` and nothing else.
 
-          Otherwise reply with this markdown and nothing else, one `<details>` block per
-          finding, grouped by file:
+          Otherwise reply with this markdown and nothing else:
 
           **Verdict:** patch is correct (confidence 0.00) · 0 findings · 0 suppressed
+
+          Give every finding of priority 2 or 3 its own block, grouped by file:
 
           <details>
           <summary><b>P3 · 0.92</b> — path/to/file.tsx:42 — title of at most 80 characters</summary>
@@ -206,6 +209,15 @@ jobs:
           body inside the `~~~~` fence so it copies cleanly, and include a GitHub
           `suggestion` block inside that fence only when the fix is a straight replacement
           of one contiguous region.
+
+          List priority 1 findings under a `#### Also` heading, one paste-ready line each,
+          rather than as blocks:
+
+          - `path/to/file.tsx:42` — the comment body the reviewer will paste.
+
+          Finally, under a `#### Suppressed` heading, give one line per finding you dropped
+          and why it fell below the bar, so nothing is hidden. Write `none` if you dropped
+          nothing.
           PROMPT
 
           # Author-supplied text is untrusted, so it is appended as data rather than
