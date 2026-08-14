@@ -1,0 +1,12 @@
+{
+  "name": "codex-review-sandbox",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fixture code for exercising the on-demand Codex review action",
+  "dependencies": {
+    "@apollo/client": "^4.2.3",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-i18next": "^15.4.0"
+  }
+}
