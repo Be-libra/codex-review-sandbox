@@ -188,11 +188,10 @@ jobs:
 
           If nothing survives the filters, reply with exactly `NO_FINDINGS` and nothing else.
 
-          Otherwise reply with this markdown and nothing else:
+          Otherwise reply with exactly these four sections, in this order, and nothing else.
+          Every section is mandatory: write `none` under a heading that has no entries.
 
           **Verdict:** patch is correct (confidence 0.00) · 0 findings · 0 suppressed
-
-          Give every finding of priority 2 or 3 its own block, grouped by file:
 
           <details>
           <summary><b>P3 · 0.92</b> — path/to/file.tsx:42 — title of at most 80 characters</summary>
@@ -205,19 +204,27 @@ jobs:
 
           </details>
 
-          Use the real repository, head commit, path, and line in the link. Keep the paste
-          body inside the `~~~~` fence so it copies cleanly, and include a GitHub
-          `suggestion` block inside that fence only when the fix is a straight replacement
-          of one contiguous region.
-
-          List priority 1 findings under a `#### Also` heading, one paste-ready line each,
-          rather than as blocks:
+          #### Also
 
           - `path/to/file.tsx:42` — the comment body the reviewer will paste.
 
-          Finally, under a `#### Suppressed` heading, give one line per finding you dropped
-          and why it fell below the bar, so nothing is hidden. Write `none` if you dropped
-          nothing.
+          #### Suppressed
+
+          - `path/to/file.tsx:42` — one line on what you dropped and why it fell below the bar.
+
+          Rules for those sections:
+
+          - One `<details>` block per finding of priority 2 or 3, grouped by file. Use the
+            real repository, head commit, path, and line in the link. Keep the paste body
+            inside the `~~~~` fence so it copies cleanly, and add a GitHub `suggestion`
+            block inside that fence only when the fix is a straight replacement of one
+            contiguous region.
+          - Every priority 1 finding goes under `#### Also` as a single paste-ready line,
+            never as a block.
+          - Every finding you dropped is named under `#### Suppressed`. The count in the
+            verdict must equal the number of lines there.
+          - There is no target number of findings. Do not stop at ten; report each distinct
+            problem you are confident about.
           PROMPT
 
           # Author-supplied text is untrusted, so it is appended as data rather than

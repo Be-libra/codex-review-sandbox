@@ -53,8 +53,6 @@ not confident about — a wrong one costs more than a missed one.
 - Tall content inside a `size="auto"` modal with no scroll container of its own →
   wrap it in a `max-h-[Nvh] overflow-y-auto` box. `h-full` and a panel-level
   `max-h` do not clamp it.
-- `className` passed to a component that is not on the `aragon/no-classname-props`
-  allowlist → style through the component's own props or variants.
 
 ### Next.js and rendering
 
@@ -71,9 +69,8 @@ not confident about — a wrong one costs more than a missed one.
 - `useEffect` with missing or over-broad dependencies, causing refetch loops or
   stale reads.
 
-### Imports and types
+### Types
 
-- Relative parent import (`../`) → use the `@/…` path alias.
 - `enum` → use a map or object literal.
 - Function taking several positional arguments → take one destructured object.
 
@@ -87,8 +84,10 @@ not confident about — a wrong one costs more than a missed one.
 Do not report:
 
 - Formatting, or anything Prettier rewrites.
-- Anything ESLint or `tsc` already catches — both run in CI and on pre-commit.
-- Import ordering.
+- Type errors `tsc` reports.
+- Import ordering, relative parent imports, unused variables, `console` calls, and
+  `className` on a non-allowlisted component. ESLint errors on all of these already,
+  on pre-commit and in CI.
 - Issues that already existed before the pull request.
 - Style preference, naming taste, or alternative-approach suggestions that do not
   change behavior.
