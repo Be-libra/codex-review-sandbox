@@ -122,14 +122,73 @@ jobs:
           )
           git diff --unified=5 "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review.diff
           git diff --stat "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review-stat.txt
+          git diff --name-only "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review-files.txt
 
-          if [ -s codex-review.diff ]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            echo "merge_base=${merge_base}" >> "$GITHUB_OUTPUT"
-          else
+          if [ ! -s codex-review.diff ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "No reviewable changes once generated files are excluded." >> "$GITHUB_STEP_SUMMARY"
+          elif ! grep -qvE '\.(md|txt)$' codex-review-files.txt; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only change, nothing to review." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "merge_base=${merge_base}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Classify the change
+        id: classify
+        if: steps.diff.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+
+          touched() { grep -qE "$1" codex-review-files.txt; }
+
+          : > codex-review-focus.md
+
+          if touched '^(components|pages|design-system|context|store)/'; then
+            cat >> codex-review-focus.md <<'FOCUS'
+          React components changed. Pay attention to state written from stale values,
+          effect dependencies, hydration-unsafe reads during render, and screens that no
+          longer handle their loading or error state.
+          FOCUS
+          fi
+
+          if touched 'queries\.ts$'; then
+            cat >> codex-review-focus.md <<'FOCUS'
+          GraphQL documents changed. Check that variables match the query, that every
+          consumer handles loading and error, and that the cache is updated after mutations.
+          FOCUS
+          fi
+
+          if touched '^utils/'; then
+            cat >> codex-review-focus.md <<'FOCUS'
+          Shared utilities changed. Grep for the call sites and check each one still holds —
+          a wrong assumption here reaches several features at once.
+          FOCUS
+          fi
+
+          if touched '^(next\.config\.js|tsconfig\.json|package\.json|\.github/)'; then
+            cat >> codex-review-focus.md <<'FOCUS'
+          Build or CI configuration changed. Check it does not weaken type checking or
+          linting, and that production behaviour is unaffected.
+          FOCUS
+          fi
+
+          # Sensitive areas and large diffs get the expensive reasoning; everything else
+          # is cheaper to review at medium.
+          risk=low
+          if touched '(auth|login|payment|stripe|paddle|subscription|credit|middleware|token|session)'; then
+            risk=high
+          elif [ "$(wc -l < codex-review-files.txt)" -gt 30 ]; then
+            risk=high
+          fi
+
+          effort=medium
+          [ "$risk" = high ] && effort=high
+
+          echo "risk=${risk}" >> "$GITHUB_OUTPUT"
+          echo "effort=${effort}" >> "$GITHUB_OUTPUT"
+          echo "Risk ${risk}, reasoning effort ${effort}, $(wc -l < codex-review-files.txt) files" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build the review prompt
         if: steps.diff.outputs.has_changes == 'true'
@@ -163,24 +222,46 @@ jobs:
           - Open surrounding files whenever a change is not self-explanatory, but review
             only what this pull request changed.
 
-          ## What to report
+          ## What counts as a finding
 
-          - Only problems this pull request introduces, judged against the AGENTS.md rules
-            for logic, consistency, and repository conventions, plus any security issue.
-          - Give each finding a priority from 0 to 3, where 3 is most severe, and a
-            confidence from 0.00 to 1.00.
-          - Do not filter by score, and do not stop at a round number. Return every
-            candidate finding, including ones you are unsure about — the workflow applies
-            the threshold and tells the reviewer what it dropped.
-          - Keep separate root causes as separate findings. Never merge two problems into
-            one comment, even when they sit on adjacent lines.
-          - File paths and line numbers must be exactly right. Drop any finding you cannot
-            anchor to a specific line in the diff.
-          - Each comment body must read as a human reviewer wrote it: at most two sentences
-            and 40 words, stating the problem and the fix. No preamble, no severity words,
-            no restating the diff.
-          - If the diff exceeds roughly 1500 changed lines, review the riskiest files first
-            and say which files you did not reach.
+          Report an issue only when all of these hold:
+
+          - It meaningfully affects correctness, performance, security, or maintainability.
+          - It is discrete and actionable, not a general complaint about the codebase.
+          - This pull request introduced it. Pre-existing problems are out of scope.
+          - The author would fix it if they knew about it.
+          - It does not demand more rigour than the surrounding code already shows.
+          - It rests on no unstated assumption about intent. If you suspect a change breaks
+            something elsewhere, name the code that provably breaks; otherwise drop it.
+          - It is not obviously a deliberate decision by the author.
+
+          If nothing meets that bar, return an empty `findings` array. A review with no
+          findings is a valid result; a review padded with weak ones is not. When findings
+          do qualify, list every one of them — do not stop at a round number.
+
+          Keep separate root causes as separate findings, even on adjacent lines. Drop any
+          finding you cannot anchor to a specific line in the diff. If the diff exceeds
+          roughly 1500 changed lines, review the riskiest files first and say in
+          `overall_explanation` which files you did not reach.
+
+          ## How to write each finding
+
+          - One paragraph, at most two sentences and 40 words: what breaks, then the fix.
+          - Name the input, state, or environment the problem needs in order to happen.
+          - Matter-of-fact tone. No flattery, no preamble, no severity words, no restating
+            the diff. The reviewer pastes this text as their own comment.
+          - Inline code is fine; never include a code block longer than three lines.
+          - `title` is imperative and at most 80 characters.
+
+          ## Priority and confidence
+
+          - `priority` follows the standard scale, where **0 is most severe**:
+            P0 drop everything, blocks release; P1 urgent, fix next cycle; P2 normal, fix
+            eventually; P3 low, nice to have.
+          - `confidence_score` runs 0.00 to 1.00.
+          - Do not filter by either score. Return every candidate finding, including ones
+            you are unsure about — the workflow applies the threshold and tells the
+            reviewer what it dropped.
 
           ## Output
 
@@ -188,17 +269,22 @@ jobs:
           headings, and no commentary — the workflow renders the comment from your JSON.
 
           - `findings` holds one entry per distinct problem, in any order. An empty array
-            means the diff is clean.
-          - `code_location.file_path` is repository-relative, such as
-            `components/UserCard/index.tsx`. `line_range.start` is the line the reviewer's
-            comment attaches to; set `end` to the same value for a single line.
-          - `title` is at most 80 characters and reads like a review comment's subject.
-          - `body` is what the reviewer pastes verbatim: at most two sentences and 40 words,
-            problem then fix, no severity words, no preamble.
-          - `priority` is 0 to 3, where 3 is most severe. `confidence_score` is 0 to 1.
-          - `overall_correctness` judges the patch as a whole, with a short
-            `overall_explanation` and its own `overall_confidence_score`.
+            means nothing met the bar.
+          - `code_location.absolute_file_path` is repository-relative, such as
+            `components/UserCard/index.tsx`.
+          - `line_range` must overlap the diff and stay as short as possible — never more
+            than ten lines. Pick the subrange that pinpoints the problem.
+          - `overall_correctness` judges the patch as a whole: correct means existing code
+            and tests will not break and the patch is free of blocking issues. Ignore style,
+            formatting, typos, and documentation when deciding it.
           PROMPT
+
+          if [ -s codex-review-focus.md ]; then
+            {
+              printf '\n## Focus for this change\n\n'
+              cat codex-review-focus.md
+            } >> codex-review-prompt.md
+          fi
 
           # Author-supplied text is untrusted, so it is appended as data rather than
           # interpolated into the instructions above.
@@ -241,9 +327,9 @@ jobs:
                     "code_location": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["file_path", "line_range"],
+                      "required": ["absolute_file_path", "line_range"],
                       "properties": {
-                        "file_path": { "type": "string" },
+                        "absolute_file_path": { "type": "string" },
                         "line_range": {
                           "type": "object",
                           "additionalProperties": false,
@@ -271,7 +357,9 @@ jobs:
           permission-profile: ":read-only"
           prompt-file: codex-review-prompt.md
           output-schema-file: codex-review-schema.json
-          effort: high
+          # Pinned so review quality does not shift when the Codex default moves.
+          model: gpt-5.6-sol
+          effort: ${{ steps.classify.outputs.effort }}
 
       - name: Post the findings
         if: steps.diff.outputs.has_changes == 'true'
@@ -337,16 +425,16 @@ jobs:
               const entry = {
                 title: String(finding.title || '').slice(0, 80),
                 body: String(finding.body || '').trim(),
-                priority: Number(finding.priority),
+                priority: Number.isInteger(finding.priority) ? finding.priority : 2,
                 confidence: Number(finding.confidence_score),
-                path: relative(String(location.file_path || '')),
+                path: relative(String(location.absolute_file_path || '')),
                 line: Number(range.start),
               };
 
               if (!entry.body || !entry.path || !Number.isInteger(entry.line)) {
                 suppressed.push({ ...entry, reason: 'could not be anchored to a line' });
-              } else if (!(entry.priority > 0)) {
-                suppressed.push({ ...entry, reason: 'priority 0' });
+              } else if (entry.priority >= 3) {
+                suppressed.push({ ...entry, reason: 'P3, nice to have' });
               } else if (!(entry.confidence >= MIN_CONFIDENCE)) {
                 suppressed.push({ ...entry, reason: `confidence ${entry.confidence.toFixed(2)}` });
               } else {
@@ -359,7 +447,7 @@ jobs:
               return;
             }
 
-            reported.sort((a, b) => b.priority - a.priority || b.confidence - a.confidence);
+            reported.sort((a, b) => a.priority - b.priority || b.confidence - a.confidence);
 
             const anchor = (entry) =>
               `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/${headSha}/${entry.path}#L${entry.line}`;
@@ -371,7 +459,7 @@ jobs:
               review.overall_explanation ? `${review.overall_explanation}\n` : '',
             ];
 
-            for (const entry of reported.filter((f) => f.priority >= 2)) {
+            for (const entry of reported.filter((f) => f.priority <= 1)) {
               lines.push(
                 '<details>',
                 `<summary><b>${label(entry)}</b> — ${entry.path}:${entry.line} — ${entry.title}</summary>`,
@@ -387,7 +475,7 @@ jobs:
               );
             }
 
-            const also = reported.filter((f) => f.priority === 1);
+            const also = reported.filter((f) => f.priority === 2);
             if (also.length) {
               lines.push('#### Also', '');
               for (const entry of also) {
