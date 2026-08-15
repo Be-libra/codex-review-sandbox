@@ -451,7 +451,6 @@ jobs:
 
             const anchor = (entry) =>
               `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/${headSha}/${entry.path}#L${entry.line}`;
-            const label = (entry) => `P${entry.priority} · ${entry.confidence.toFixed(2)}`;
 
             const lines = [
               `**Verdict:** ${review.overall_correctness} (confidence ${Number(review.overall_confidence_score).toFixed(2)}) · ${reported.length} findings · ${suppressed.length} suppressed`,
@@ -459,29 +458,28 @@ jobs:
               review.overall_explanation ? `${review.overall_explanation}\n` : '',
             ];
 
-            for (const entry of reported.filter((f) => f.priority <= 1)) {
-              lines.push(
-                '<details>',
-                `<summary><b>${label(entry)}</b> — ${entry.path}:${entry.line} — ${entry.title}</summary>`,
-                '',
-                `[view line](${anchor(entry)})`,
-                '',
-                '~~~~markdown',
-                entry.body,
-                '~~~~',
-                '',
-                '</details>',
-                '',
-              );
-            }
+            const TIERS = [
+              { priority: 0, heading: '#### P0 · blocking' },
+              { priority: 1, heading: '#### P1 · fix before merge' },
+              { priority: 2, heading: '#### P2 · also worth fixing' },
+            ];
 
-            const also = reported.filter((f) => f.priority === 2);
-            if (also.length) {
-              lines.push('#### Also', '');
-              for (const entry of also) {
-                lines.push(`- [\`${entry.path}:${entry.line}\`](${anchor(entry)}) — ${entry.body}`);
+            // Numbering runs across tiers so a reviewer can refer to a finding by number.
+            let index = 0;
+            for (const tier of TIERS) {
+              const entries = reported.filter((f) => f.priority === tier.priority);
+              if (!entries.length) {
+                continue;
               }
-              lines.push('');
+              lines.push(tier.heading, '');
+              for (const entry of entries) {
+                index += 1;
+                lines.push(
+                  `${index}. **${entry.title}** — [\`${entry.path}:${entry.line}\`](${anchor(entry)}) · ${entry.confidence.toFixed(2)}`,
+                  `   ${entry.body}`,
+                  '',
+                );
+              }
             }
 
             if (suppressed.length) {
