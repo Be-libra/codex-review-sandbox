@@ -74,7 +74,10 @@ jobs:
             core.setOutput('body', pr.body || '');
 
             const command = context.payload.comment?.body ?? context.payload.review?.body ?? '';
-            core.setOutput('focus', command.replace(/^\/codex-review/, '').trim());
+            core.setOutput(
+              'focus',
+              command.replace(/^\/codex-review/, '').replace('--force', '').trim(),
+            );
 
             if (context.eventName === 'issue_comment') {
               await github.rest.reactions.createForIssueComment({
@@ -93,7 +96,29 @@ jobs:
               });
             }
 
+            // Reviewing the same commit twice costs a full run and says the same thing.
+            const shortSha = pr.head.sha.slice(0, 7);
+            if (!command.includes('--force')) {
+              const { data: comments } = await github.rest.issues.listComments({
+                ...context.repo,
+                issue_number: number,
+                per_page: 100,
+              });
+              const existing = comments.find(
+                (c) => c.user.login === 'github-actions[bot]' && c.body.includes(`\`${shortSha}\``),
+              );
+              if (existing) {
+                core.setOutput('proceed', 'false');
+                core.notice(
+                  `${shortSha} already has a review: ${existing.html_url}. Add --force to review it again.`,
+                );
+                return;
+              }
+            }
+            core.setOutput('proceed', 'true');
+
       - uses: actions/checkout@v5
+        if: steps.pr.outputs.proceed == 'true'
         with:
           ref: refs/pull/${{ steps.pr.outputs.number }}/head
           # Full history so the base branch and the merge base are reachable.
@@ -102,6 +127,7 @@ jobs:
 
       - name: Collect the diff
         id: diff
+        if: steps.pr.outputs.proceed == 'true'
         env:
           BASE_REF: ${{ steps.pr.outputs.base_ref }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -122,6 +148,9 @@ jobs:
             ':(exclude)**/*.generated.ts'
             ':(exclude)public/**'
             ':(exclude)lottie/**'
+            ':(exclude)**/*.svg'
+            ':(exclude)**/*.snap'
+            ':(exclude)**/*.map'
           )
           git diff --unified=5 "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review.diff
           git diff --stat "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review-stat.txt
