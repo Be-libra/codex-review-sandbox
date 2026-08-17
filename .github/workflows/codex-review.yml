@@ -142,16 +142,23 @@ jobs:
           merge_base=$(git merge-base "origin/${BASE_REF}" HEAD)
           echo "Reviewing ${merge_base}..$(git rev-parse --short HEAD)"
 
+          # A leading `**/` would only match inside subdirectories, so these use a bare
+          # `*`, which git pathspec matches across directory separators.
           excludes=(
             ':(exclude)yarn.lock'
             ':(exclude)components/types.ts'
-            ':(exclude)**/*.generated.ts'
+            ':(exclude)*.generated.ts'
             ':(exclude)public/**'
             ':(exclude)lottie/**'
-            ':(exclude)**/*.svg'
-            ':(exclude)**/*.snap'
-            ':(exclude)**/*.map'
+            ':(exclude)*.svg'
+            ':(exclude)*.snap'
+            ':(exclude)*.map'
           )
+          # Media never carries a review finding, and counting it would inflate the file
+          # count that drives the risk score.
+          for ext in png jpg jpeg gif webp avif ico mp4 webm woff woff2 ttf otf eot pdf; do
+            excludes+=(":(exclude)*.${ext}")
+          done
           git diff --unified=5 "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review.diff
           git diff --stat "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review-stat.txt
           git diff --name-only "${merge_base}" HEAD -- . "${excludes[@]}" > codex-review-files.txt
