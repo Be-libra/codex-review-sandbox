@@ -21,10 +21,9 @@ Open a pull request, then trigger it one of four ways:
 - add the `codex-review` label
 - **Actions → Codex Review → Run workflow**, passing the pull request number
 
-Nothing runs automatically, and nothing is posted to the pull request. The review
-appears in the workflow run summary under the Actions tab, so only you see it until you
-decide to share. Add `--post` to the command to publish it as a comment instead.
+Nothing runs automatically. The workflow posts one advisory comment on the pull request,
+and mirrors it into the workflow run summary.
 
 Findings are numbered and grouped under `P0`, `P1`, and `P2` headings, each with a
 `file:line` link and a paste-ready sentence. Anything below the bar is listed under
-`Suppressed` with the reason, and a clean diff produces nothing at all.
+`Suppressed` with the reason, and a clean diff produces no comment at all.
